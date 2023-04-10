@@ -1,0 +1,375 @@
+﻿Решение бизнес-задач с помощью SQL 
+ЛЕГЕНДА
+ В услугах аналитика нуждается молодая, но перспективная компания Pens and Pencils. Компания базируется в США и там же осуществляет свою деятельность. С марта 2017 года её профиль — B2B и B2C-продажи офисных товаров (оргтехника, канцтовары и мебель) онлайн. 
+ЗАДАЧА
+В рамках тестового задания проанализировать работу компании с точки зрения её эффективности и дать рекомендации по масштабированию бизнеса, а именно в каком штате лучше открыть офлайн-магазин.
+КОНКРЕТНЫЕ ШАГИ (ФОРМАЛИЗОВАННАЯ ЗАДАЧА)
+1. Оценить динамику продаж и распределение выручки по товарам.
+2. Составить портрет клиента, а для этого — выяснить, какие клиенты приносят больше всего выручки.
+3. Проконтролировать логистику компании (определить, все ли заказы доставляются в срок и в каком штате лучше открыть офлайн-магазин).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Шаг 1: Определяем эффективность продаж
+
+
+Для этого ответим на следующие вопросы:
+* Какова динамика продаж?
+* Какие категории и подкатегории продаж приносят больше всего выручки?
+* Какие товары продаются лучше всего?
+1.1. Рассмотрим динамику продаж. Для этого напишем запрос, который выводит сумму выручки по месяцам:
+
+
+with month_date as (                
+select
+order_id,  
+date_trunc('month', order_date)::date as month
+from sql.store_delivery),
+
+
+ 
+month_revenue as (                        
+select
+order_id,
+sum((p.price-p.price*ca.discount)*ca.quantity) as order_amount
+from sql.store_carts ca
+left join sql.store_products p on ca.product_id = p.product_id
+group by 1
+order by 1)
+
+
+ 
+select
+month as date,
+round(sum(order_amount)) as revenue 
+from month_date d join month_revenue r on d.order_id=r.order_id 
+group by 1
+order by 1
+
+
+1.2. Давайте визуализируем результаты выручки в по месяцам:
+  
+
+Из разбивки видно, что выручка растет. Наблюдается сезонность роста и падения выручки: зимой наблюдается спад, осенью - рост.  
+
+
+1.3. Определим, какие категории и подкатегории приносят больше всего выручки. Для этого напишем запрос, который выводит сумму выручки по различным категориям и подкатегориям:
+
+
+with subcategory as (
+select 
+product_id,
+subcategory
+from sql.store_products
+group by 1,2),
+
+
+category as(
+select 
+product_id,
+category
+from sql.store_products
+group by 1,2
+),
+ 
+revenue as (
+select
+p.product_id,
+sum((p.price-p.price*ca.discount)*ca.quantity) as order_amount
+from sql.store_carts ca
+left join sql.store_products p on ca.product_id = p.product_id
+group by 1
+order by 1)
+
+
+ 
+select 
+category,
+subcategory,
+round(sum(order_amount)) as revenue 
+from category c  
+join revenue r on c.product_id=r.product_id 
+join subcategory s on s.product_id=c.product_id
+group by 1,2
+order by 3 desc
+
+
+1.4. Посмотрим, какие товары продаются лучше всего. Для этого напишем запрос, который выведет данные топ-25 товаров по объёму выручки:
+
+
+with t_rev as (
+  select
+  sum(price * quantity * (1 - discount)) sumrevenue
+  from  sql.store_carts sc
+  join sql.store_products p on sc.product_id = p.product_id)
+
+
+select
+  product_nm,
+  round(sum(price * quantity * (1 - discount)), 2) revenue,
+  sum(quantity) quantity,
+  round(sum(price * quantity * (1 - discount)) / avg(t_rev.sumrevenue) * 100, 2)   percent_from_total
+from
+  sql.store_carts c join sql.store_products p on c.product_id = p.product_id
+  join t_rev on true
+group by 1
+order by 2 desc
+limit 25
+
+
+
+
+Шаг 2: Составляем портрет клиента
+ 
+Сформулируем вопросы, которые помогут получить больше информации о клиентах компании:
+* Как соотносится количество клиентов по категориям B2B и B2C?
+* Как соотносится выручка по этим категориям?
+* Каких клиентов больше, новых или старых?
+
+
+
+
+2.1. Определим, как соотносится количество клиентов по категориям. Для этого напишем запрос, который выводит сколько у компании B2B и B2C-клиентов и какую долю от общей выручки они приносят
+
+
+with revenue_category as
+(
+select
+scust.category as category,
+count(distinct scust.cust_id) as cust_cnt,
+sum(scart.quantity*(sprod.price*(1-scart.discount))) as revenue
+
+
+from sql.store_customers as scust
+ 
+join sql.store_delivery as sdel on scust.cust_id=sdel.cust_id
+join sql.store_carts as scart on scart.order_id=sdel.order_id
+join sql.store_products as sprod on scart.product_id=sprod.product_id
+ 
+group by scust.cust_id, scust.category
+order by revenue desc
+)
+
+
+select
+revenue_category.category as category,
+
+
+count(revenue_category.cust_cnt ) as cust_cnt,
+round(sum(revenue_category.revenue)) as revenue
+
+
+from revenue_category
+group by revenue_category.category
+order by revenue desc
+
+
+
+
+2.2. Проанализируем динамику новых B2B-клиентов по месяцам. Растет выручка за счёт увеличения продаж по старым клиентам или же за счёт привлечения новых? 
+Напишем запрос, который выведет количество новых корпоративных клиентов по месяцам:
+
+
+with first_date as(
+select 
+min(date_trunc('month', order_date)::date) min_date,
+d.cust_id
+from sql.store_customers c join sql.store_delivery d on c.cust_id=d.cust_id
+where category = 'Corporate'
+group by 2)
+
+
+select 
+min_date as first_date,
+count (distinct cust_id) count
+from first_date
+group by 1
+order by 1 asc
+  
+
+Как видно из графика, в самом начале было привлечено много клиентов, а после 2018 года новые клиенты почти не привлекались.
+
+
+2.3
+1. Давайте определим, сколько в среднем различных товаров у корпоративных клиентов. Для этого напишем запрос:
+ 
+with corp_orders as  
+  (select
+ca.order_id, 
+count(distinct ca.product_id) as count_products 
+          from sql.store_carts ca   
+   join sql.store_delivery d on d.order_id = ca.order_id
+   join sql.store_customers cu on cu.cust_id=d.cust_id
+   where cu.category = 'Corporate'
+   group by 1  1)
+select
+round(avg(count_products), 1)
+from corp_orders
+
+
+2.Определим среднюю сумма заказов у копроративных клиентов. Для этого напишем запрос:
+
+
+with sum_revenue_by_order as 
+(select
+distinct c.order_id,
+sum(quantity*price*(1-discount)) over (partition by c.order_id) revenue
+from sql.store_carts c 
+join sql.store_products p on p.product_id=c.product_id
+join sql.store_delivery d on d.order_id=c.order_id
+join sql.store_customers sc on sc.cust_id=d.cust_id
+where sc.category='Corporate')
+select
+round(avg(revenue),1) avg_revenue_per_order --считаем среднюю выручку по всем заказам.
+from sum_revenue_by_order
+
+
+3.Определим, сколько в среднем различных офисов у корпоративных клиентов. Для этого напишем запрос:
+
+
+With zip as (
+select distinct
+sc.cust_id,
+count(distinct zip_code) zip_cnt
+from sql.store_delivery d 
+join sql.store_customers sc on sc.cust_id=d.cust_id
+where sc.category='Corporate'
+group by 1)
+select 
+round(avg(zip_cnt),1) avg_zip_code
+from zip
+
+
+
+
+Шаг 3: Анализируем логистику компании
+
+
+Вновь сформулируем вопросы, на которые нам предстоит найти ответы в рамках задачи:
+* Насколько эффективно выполняются текущие доставки?
+* Как распределяются доставки и выручка по штатам и городам? (Ответ на этот вопрос поможет определить наиболее удачное место для офлайн-магазина.)
+
+
+3.1 Напишем запрос, который выводит, насколько эффективно выполняются текущие доставки. Для этого напишем запрос:
+
+
+with orders_time as
+(select 
+ship_mode,
+count(order_id) order_cnt,
+count (case when ship_mode = 'Standard Class' and (ship_date-order_date)<= 6 then order_id
+when ship_mode = 'Second Class' and (ship_date-order_date)<= 4 then order_id
+when ship_mode = 'First Class' and (ship_date-order_date)<= 3 then order_id
+when ship_mode = 'Same Day' and (ship_date-order_date)<= 0 then order_id
+else null end) on_time_orders
+from sql.store_delivery
+group by 1)
+
+
+select 
+ship_mode,
+order_cnt,
+order_cnt  - on_time_orders as late_orders_cnt,
+round(on_time_orders*100/order_cnt::numeric,2) as "% success"
+from orders_time
+order by 4 asc
+
+
+
+
+
+
+3.2.  Мы видим, что доставка вторым классом задерживается чаще остальных. Проверим, являются ли задержки систематическими. Для этого напишем запрос, чтобы вывести долю заказов, отправленных вторым классом, которые были доставлены с опозданием, по кварталам:
+
+
+with ship_status as (Select
+ship_mode,                  
+order_id,
+ship_date,                     
+order_date,                  
+case 
+when ship_mode = 'Second Class' and (ship_date-order_date)>4 then 'late'
+Else 'others'
+end as ship_status
+from sql.store_delivery)
+ 
+select 
+date_trunc('quarter', order_date)::date as quarter, 
+round((count(case when ship_status = 'late' then order_id end)*100)/count(case when ship_mode = 'Second Class' then order_id end)::numeric,2) as "% late"
+from ship_status
+group by 1
+order by 1
+  
+
+3.3. Сделаем вывод о характере задержек доставки вторым классом: 
+      Доставка задерживается систематически. Процент опоздавших доставок в 2017 и 2018-ых годах был больше, чем в 2019 и 2020-ых годах. Средний процент задерживающихся доставок в 2019 году - 16.25, в 2020 году - 20.75. Процент задерживающихся доставок систематичен и растет. 
+
+
+Давайте выберем точку для офлайн продаж
+3.4. Определим, какой штат наиболее популярный по количеству доставок. Для этого напишем запрос:
+
+
+select 
+count(distinct order_id),state
+from sql.store_delivery
+group by 2
+order by 1 desc
+
+
+3.5. Определим, какой город наиболее популярный по количеству доставок. Для этого напишем запрос:
+
+
+select 
+count(distinct order_id),city
+from sql.store_delivery
+group by 2
+order by 1 desc
+
+
+3.6. Определим процент доставок по штатам. Для этого напишем запрос:
+
+
+select 
+count(distinct order_id),state
+from sql.store_delivery
+group by 2
+order by 1 desc
+
+
+  
+
+
+
+Выводы и рекомендации
+Шаг 1: Выручка растет. Наблюдается сезонность роста и падения выручки: зимой наблюдается спад, осенью - рост. Самые большие продажи наблюдаются в категориях Furniture,Technology,Office Supplies. Самые большие продажи среди подкатегорий наблюдаются  Chairs,Phones,Storage. Самую большую выручку в Америке приносит продажа кресел. 
+Шаг 2: B2B-клиентов намного больше, и выручки они приносят тоже в разы больше. Когортный анализ корпоративных клиентов показывает, что в начале было привлечено много клиентов, позже 2018 года клиенты почти не привлекались. Стоит обратить внимание на увеличение привлечения новых клиентов. Средняя сумма заказов у корпоративных клиентов 285.9.
+Шаг 3:Чаще всего с опозданием доходят заказы, отправленные вторым классом.
+Доставка задерживается систематически. Процент опоздавших доставок в 2017 и 2018-ых годах был больше, чем в 2019 и 2020-ых годах. Средний процент задерживающихся доставок в 2019 году - 16.25, в 2020 году - 20.75. Процент задерживающихся доставок систематичен и растет. 
+Для открытия оффлайн магазина лучшим вариантом является штат Калифорния - 20% доставок были заказаны в этот штат. Открытие оффлайн магазина поможет привлечь новых клиентов, сократить затраты на доставку. Так же можно рассмотреть масштабирование в штате Нью-Йорк и Техас, процент заказов из штатов ниже, чем в Калифорнии, однако при должном привлечении новых клиентов имеется потенциал развития.
